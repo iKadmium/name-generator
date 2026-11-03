@@ -2,9 +2,10 @@ pub mod data;
 
 use std::sync::Arc;
 
-use axum::extract::State;
 use axum::extract::rejection::JsonRejection;
+use axum::extract::{Request, State};
 use axum::http::StatusCode;
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
@@ -17,10 +18,39 @@ pub const MAX_PEOPLE: usize = 100;
 
 type AppState = Arc<Dataset>;
 
-pub fn app(dataset: Dataset) -> Router {
+/// Header clients must send the API key in.
+pub const API_KEY_HEADER: &str = "x-api-key";
+
+/// Build the router. Every route requires `api_key` in the [`API_KEY_HEADER`]
+/// header.
+pub fn app(dataset: Dataset, api_key: String) -> Router {
+    let api_key: Arc<str> = api_key.into();
     Router::new()
         .route("/names", post(names))
+        .route_layer(middleware::from_fn_with_state(api_key, require_api_key))
         .with_state(Arc::new(dataset))
+}
+
+async fn require_api_key(State(key): State<Arc<str>>, req: Request, next: Next) -> Response {
+    let authorized = req
+        .headers()
+        .get(API_KEY_HEADER)
+        .is_some_and(|v| constant_time_eq(v.as_bytes(), key.as_bytes()));
+    if authorized {
+        next.run(req).await
+    } else {
+        ApiError(
+            StatusCode::UNAUTHORIZED,
+            format!("missing or invalid {API_KEY_HEADER} header"),
+        )
+        .into_response()
+    }
+}
+
+/// Compare without short-circuiting on the first differing byte, so response
+/// timing doesn't reveal how much of a guessed key is correct.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 #[derive(Deserialize)]
