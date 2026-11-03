@@ -6,14 +6,14 @@ weighted by popularity, using the ONS
 (1904–2024).
 
 ```sh
-cargo run                    # listens on 0.0.0.0:3000 (override with BIND_ADDR)
+API_KEY=secret cargo run     # listens on 0.0.0.0:3000 (override with BIND_ADDR)
 cargo test
 ```
 
 ## Docker
 
 ```sh
-docker run --rm -p 3000:3000 ghcr.io/ikadmium/name-generator
+docker run --rm -p 3000:3000 -e API_KEY=secret ghcr.io/ikadmium/name-generator
 ```
 
 The image is a single static binary on `scratch`, published for `linux/amd64`
@@ -34,10 +34,16 @@ docker buildx build --platform linux/amd64,linux/arm64 .
 
 ## API
 
+### Authentication
+
+The server refuses to start unless the `API_KEY` environment variable is set.
+Every request must send that value in the `X-API-Key` header, or it gets
+`401`.
+
 ### `POST /names`
 
 ```sh
-$ curl localhost:3000/names -H 'content-type: application/json' -d '{
+$ curl localhost:3000/names -H 'x-api-key: secret' -H 'content-type: application/json' -d '{
     "people": [
       {"gender": "female", "year": 1987},
       {"gender": "male", "year": 2026}
@@ -64,6 +70,7 @@ list before the next person's name is drawn, across genders and years.
 
 Errors return JSON `{"error": "..."}`:
 
+- `401` when the `X-API-Key` header is missing or wrong
 - `400` for malformed JSON
 - `415` when the `Content-Type` isn't `application/json`
 - `422` when fields are missing or invalid, or the forbidden list leaves no

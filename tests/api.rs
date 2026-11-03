@@ -3,19 +3,29 @@ use std::collections::HashSet;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
-use name_generator::{app, data::Dataset};
+use name_generator::{API_KEY_HEADER, app, data::Dataset};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-async fn post_raw(body: &str, content_type: &str) -> (StatusCode, Value) {
-    let req = Request::post("/names")
-        .header(header::CONTENT_TYPE, content_type)
-        .body(Body::from(body.to_owned()))
+const KEY: &str = "test-key";
+
+async fn send(body: &str, content_type: &str, api_key: Option<&str>) -> (StatusCode, Value) {
+    let mut req = Request::post("/names").header(header::CONTENT_TYPE, content_type);
+    if let Some(key) = api_key {
+        req = req.header(API_KEY_HEADER, key);
+    }
+    let req = req.body(Body::from(body.to_owned())).unwrap();
+    let res = app(Dataset::embedded(), KEY.into())
+        .oneshot(req)
+        .await
         .unwrap();
-    let res = app(Dataset::embedded()).oneshot(req).await.unwrap();
     let status = res.status();
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
     (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+async fn post_raw(body: &str, content_type: &str) -> (StatusCode, Value) {
+    send(body, content_type, Some(KEY)).await
 }
 
 async fn post(body: Value) -> (StatusCode, Value) {
@@ -129,4 +139,26 @@ async fn invalid_bodies() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{resp}");
     let (status, resp) = post_raw("{}", "text/plain").await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{resp}");
+}
+
+#[tokio::test]
+async fn requires_api_key() {
+    let body = json!({"people": [{"gender": "male", "year": 1990}]}).to_string();
+    for key in [
+        None,
+        Some(""),
+        Some("wrong"),
+        Some("test-keyx"),
+        Some("TEST-KEY"),
+    ] {
+        let (status, resp) = send(&body, "application/json", key).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{key:?}: {resp}");
+        assert!(resp["error"].is_string(), "{key:?}: {resp}");
+    }
+    // Auth is checked before the body is parsed.
+    let (status, _) = send("{not json", "application/json", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, resp) = send(&body, "application/json", Some(KEY)).await;
+    assert_eq!(status, StatusCode::OK, "{resp}");
 }
