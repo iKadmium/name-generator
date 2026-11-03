@@ -1,4 +1,5 @@
 use name_generator::{app, data::Dataset};
+use tokio::signal;
 
 #[tokio::main]
 async fn main() {
@@ -8,9 +9,27 @@ async fn main() {
         .unwrap_or_else(|e| panic!("failed to bind {addr}: {e}"));
     println!("listening on http://{addr}");
     axum::serve(listener, app(Dataset::embedded()))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("server error");
+}
+
+/// Resolves on Ctrl+C or SIGTERM (what `docker stop` sends).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
 }

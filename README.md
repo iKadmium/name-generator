@@ -10,6 +10,28 @@ cargo run                    # listens on 0.0.0.0:3000 (override with BIND_ADDR)
 cargo test
 ```
 
+## Docker
+
+```sh
+docker run --rm -p 3000:3000 ghcr.io/ikadmium/name-generator
+```
+
+The image is a single static binary on `scratch`, published for `linux/amd64`
+and `linux/arm64`. The Dockerfile cross-compiles on the build host with
+`rust-lld`, so no emulation is needed.
+
+```sh
+docker buildx build --platform linux/amd64,linux/arm64 .
+```
+
+## CI
+
+`.github/workflows/ci.yml` runs on pull requests and pushes to `main`:
+
+- `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`
+- multi-arch Docker build; on `main` it is pushed to GHCR as `latest` and
+  `sha-<short sha>`
+
 ## API
 
 ### `POST /names`

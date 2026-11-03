@@ -13,3 +13,8 @@ tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net", "s
 http-body-util = "0.1.5"
 serde_json = "1.0.154"
 tower = { version = "0.5.3", features = ["util"] }
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
