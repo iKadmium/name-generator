@@ -23,6 +23,13 @@ pub enum Gender {
 }
 
 impl Gender {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Male => "male",
+            Self::Female => "female",
+        }
+    }
+
     fn parse(s: &str) -> Option<Self> {
         match s {
             "male" => Some(Self::Male),
@@ -50,31 +57,47 @@ pub struct Dataset {
     tables: HashMap<Gender, Vec<YearTable>>,
 }
 
+/// One name to generate.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+pub struct Person {
+    pub gender: Gender,
+    pub year: i32,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum PickError {
-    /// The forbidden list leaves fewer names than were requested.
-    NotEnoughNames { requested: usize, available: usize },
+    /// Every name for this person's gender and year has been forbidden or
+    /// already picked.
+    NoNamesLeft {
+        index: usize,
+        gender: Gender,
+        dataset_year: u16,
+    },
 }
 
 impl fmt::Display for PickError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotEnoughNames {
-                requested,
-                available,
+            Self::NoNamesLeft {
+                index,
+                gender,
+                dataset_year,
             } => write!(
                 f,
-                "requested {requested} name(s) but only {available} remain after excluding forbidden names"
+                "no {} names left for {dataset_year} (people[{index}]) after excluding forbidden and already-picked names",
+                gender.as_str()
             ),
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct Picked {
+    pub name: String,
+    pub gender: Gender,
+    pub year: i32,
     /// The year from the dataset that was actually used.
     pub dataset_year: u16,
-    pub names: Vec<String>,
 }
 
 impl Dataset {
@@ -131,52 +154,56 @@ impl Dataset {
             .expect("every gender has at least one year")
     }
 
-    /// Pick `count` distinct names, weighted by popularity, excluding any in
-    /// `forbidden` (case-insensitive).
+    /// Pick one name per person, in order, weighted by popularity. Names in
+    /// `forbidden` (case-insensitive) are excluded, and each picked name is
+    /// excluded from the picks after it, so all returned names are distinct.
     pub fn pick<R: Rng + ?Sized>(
         &self,
-        gender: Gender,
-        year: i32,
+        people: &[Person],
         forbidden: &[String],
-        count: usize,
         rng: &mut R,
-    ) -> Result<Picked, PickError> {
-        let table = self.table(gender, year);
-        let forbidden: HashSet<String> = forbidden.iter().map(|n| n.to_lowercase()).collect();
-        let mut candidates: Vec<&Entry> = table
-            .entries
-            .iter()
-            .filter(|e| !forbidden.contains(&e.name.to_lowercase()))
-            .collect();
-
-        if candidates.len() < count {
-            return Err(PickError::NotEnoughNames {
-                requested: count,
-                available: candidates.len(),
+    ) -> Result<Vec<Picked>, PickError> {
+        let mut forbidden: HashSet<String> = forbidden.iter().map(|n| n.to_lowercase()).collect();
+        let mut picked = Vec::with_capacity(people.len());
+        for (index, &Person { gender, year }) in people.iter().enumerate() {
+            let table = self.table(gender, year);
+            let candidates: Vec<&Entry> = table
+                .entries
+                .iter()
+                .filter(|e| !forbidden.contains(&e.name.to_lowercase()))
+                .collect();
+            let entry = weighted_choice(&candidates, rng).ok_or(PickError::NoNamesLeft {
+                index,
+                gender,
+                dataset_year: table.year,
+            })?;
+            forbidden.insert(entry.name.to_lowercase());
+            picked.push(Picked {
+                name: entry.name.clone(),
+                gender,
+                year,
+                dataset_year: table.year,
             });
         }
-
-        let mut names = Vec::with_capacity(count);
-        for _ in 0..count {
-            let total: f64 = candidates.iter().map(|e| e.weight).sum();
-            let mut target = rng.random_range(0.0..total);
-            // Fall back to the last candidate in case of float rounding.
-            let mut idx = candidates.len() - 1;
-            for (i, e) in candidates.iter().enumerate() {
-                if target < e.weight {
-                    idx = i;
-                    break;
-                }
-                target -= e.weight;
-            }
-            names.push(candidates.swap_remove(idx).name.clone());
-        }
-
-        Ok(Picked {
-            dataset_year: table.year,
-            names,
-        })
+        Ok(picked)
     }
+}
+
+fn weighted_choice<'a, R: Rng + ?Sized>(
+    candidates: &[&'a Entry],
+    rng: &mut R,
+) -> Option<&'a Entry> {
+    let last = candidates.last()?;
+    let total: f64 = candidates.iter().map(|e| e.weight).sum();
+    let mut target = rng.random_range(0.0..total);
+    for e in candidates {
+        if target < e.weight {
+            return Some(e);
+        }
+        target -= e.weight;
+    }
+    // Only reachable through float rounding.
+    Some(last)
 }
 
 #[cfg(test)]
@@ -210,6 +237,10 @@ mod tests {
         assert_eq!(y(2100), 2024);
     }
 
+    fn people(gender: Gender, year: i32, n: usize) -> Vec<Person> {
+        vec![Person { gender, year }; n]
+    }
+
     #[test]
     fn respects_forbidden_case_insensitively() {
         let ds = Dataset::embedded();
@@ -223,30 +254,70 @@ mod tests {
             .map(|e| e.name.to_uppercase())
             .collect();
         let picked = ds
-            .pick(Gender::Male, 1954, &forbidden, 1, &mut rng())
+            .pick(&people(Gender::Male, 1954, 1), &forbidden, &mut rng())
             .unwrap();
-        assert_eq!(picked.names, vec![keep.clone()]);
+        assert_eq!(picked[0].name, *keep);
+        assert_eq!(picked[0].dataset_year, 1954);
     }
 
     #[test]
-    fn multiple_names_are_distinct() {
+    fn picks_are_distinct() {
         let ds = Dataset::embedded();
-        let picked = ds.pick(Gender::Female, 2024, &[], 100, &mut rng()).unwrap();
-        let unique: HashSet<_> = picked.names.iter().collect();
+        let picked = ds
+            .pick(&people(Gender::Female, 2024, 100), &[], &mut rng())
+            .unwrap();
+        let unique: HashSet<_> = picked.iter().map(|p| &p.name).collect();
         assert_eq!(unique.len(), 100);
     }
 
     #[test]
-    fn errors_when_not_enough_names() {
+    fn picks_are_distinct_across_genders_and_years() {
+        // "Jordan" is in both 1994 lists; with everything else forbidden it
+        // can only be picked once.
+        let ds = Dataset::embedded();
+        let others: Vec<String> = [Gender::Male, Gender::Female]
+            .iter()
+            .flat_map(|&g| ds.table(g, 1994).entries.iter())
+            .map(|e| e.name.clone())
+            .filter(|n| n != "Jordan")
+            .collect();
+        let people = [
+            Person {
+                gender: Gender::Male,
+                year: 1994,
+            },
+            Person {
+                gender: Gender::Female,
+                year: 1994,
+            },
+        ];
+        let err = ds.pick(&people, &others, &mut rng()).unwrap_err();
+        assert_eq!(
+            err,
+            PickError::NoNamesLeft {
+                index: 1,
+                gender: Gender::Female,
+                dataset_year: 1994
+            }
+        );
+    }
+
+    #[test]
+    fn errors_when_names_run_out() {
         let ds = Dataset::embedded();
         let err = ds
-            .pick(Gender::Female, 2024, &["Olivia".into()], 100, &mut rng())
+            .pick(
+                &people(Gender::Female, 2024, 100),
+                &["Olivia".into()],
+                &mut rng(),
+            )
             .unwrap_err();
         assert_eq!(
             err,
-            PickError::NotEnoughNames {
-                requested: 100,
-                available: 99
+            PickError::NoNamesLeft {
+                index: 99,
+                gender: Gender::Female,
+                dataset_year: 2024
             }
         );
     }
@@ -255,10 +326,11 @@ mod tests {
     fn weighted_towards_top_ranks() {
         let ds = Dataset::embedded();
         let mut rng = rng();
+        let one = people(Gender::Male, 1904, 1);
         let mut top = 0;
         let mut bottom = 0;
         for _ in 0..20_000 {
-            let n = &ds.pick(Gender::Male, 1904, &[], 1, &mut rng).unwrap().names[0];
+            let n = &ds.pick(&one, &[], &mut rng).unwrap()[0].name;
             if n == "William" {
                 top += 1; // rank 1
             } else if n == "Jesse" {

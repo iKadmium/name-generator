@@ -10,37 +10,42 @@ cargo run                    # listens on 0.0.0.0:3000 (override with BIND_ADDR)
 cargo test
 ```
 
-## Endpoints
+## API
 
-### `GET /name`
-
-| param       | required | notes                                                      |
-|-------------|----------|------------------------------------------------------------|
-| `gender`    | yes      | `male` / `female` (also accepts `m`, `boy`, `f`, `girl`)   |
-| `year`      | yes      | birth year                                                 |
-| `forbidden` | no       | comma-separated names to exclude (case-insensitive)        |
+### `POST /names`
 
 ```sh
-$ curl 'localhost:3000/name?gender=female&year=1987&forbidden=Sarah,Emma'
-{"name":"Laura","gender":"female","year":1987,"dataset_year":1984}
+$ curl localhost:3000/names -H 'content-type: application/json' -d '{
+    "people": [
+      {"gender": "female", "year": 1987},
+      {"gender": "male", "year": 2026}
+    ],
+    "forbidden": ["Sarah", "Emma"]
+  }'
+{"names":[
+  {"name":"Laura","gender":"female","year":1987,"dataset_year":1984},
+  {"name":"Theo","gender":"male","year":2026,"dataset_year":2024}
+]}
 ```
 
-### `GET /names`
+| field       | required | notes                                                          |
+|-------------|----------|----------------------------------------------------------------|
+| `people`    | yes      | 1–100 `{gender, year}` objects; one name is returned for each, in order |
+| `gender`    |          | `male` / `female` (also accepts `m`, `boy`, `f`, `girl`)       |
+| `year`      |          | birth year                                                     |
+| `forbidden` | no       | names to exclude (case-insensitive)                            |
 
-Same parameters plus `count` (1–100, required). Returns `count` distinct names:
-each pick is added to the forbidden list before the next one is drawn.
-
-```sh
-$ curl 'localhost:3000/names?gender=male&year=2026&count=3'
-{"names":["Theo","Arthur","Jude"],"gender":"male","year":2026,"dataset_year":2024}
-```
+All returned names are distinct. Each name picked is added to the forbidden
+list before the next person's name is drawn, across genders and years.
 
 ### Errors
 
 Errors return JSON `{"error": "..."}`:
 
-- `400` for missing or invalid parameters
-- `422` when the forbidden list leaves fewer names than requested
+- `400` for malformed JSON
+- `415` when the `Content-Type` isn't `application/json`
+- `422` when fields are missing or invalid, or the forbidden list leaves no
+  names for a person
 
 ## How the data is used
 

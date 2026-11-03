@@ -2,54 +2,38 @@ pub mod data;
 
 use std::sync::Arc;
 
-use axum::extract::rejection::QueryRejection;
-use axum::extract::{Query, State};
+use axum::extract::State;
+use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::post;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use data::{Dataset, Gender, PickError};
+use data::{Dataset, Person, PickError, Picked};
 
-/// Upper bound on `count` for `/names`.
-pub const MAX_COUNT: usize = 100;
+/// Upper bound on the number of people in one request.
+pub const MAX_PEOPLE: usize = 100;
 
 type AppState = Arc<Dataset>;
 
 pub fn app(dataset: Dataset) -> Router {
     Router::new()
-        .route("/name", get(name))
-        .route("/names", get(names))
+        .route("/names", post(names))
         .with_state(Arc::new(dataset))
 }
 
-/// Query parameters shared by both endpoints. (Not split into two structs with
-/// `#[serde(flatten)]`, which breaks number parsing from query strings.)
 #[derive(Deserialize)]
-struct NameQuery {
-    gender: Gender,
-    year: i32,
-    /// Comma-separated names to exclude.
-    forbidden: Option<String>,
-    /// Number of names; required by `/names`, ignored by `/name`.
-    count: Option<usize>,
-}
-
-#[derive(Serialize)]
-struct NameResponse {
-    name: String,
-    gender: Gender,
-    year: i32,
-    dataset_year: u16,
+#[serde(deny_unknown_fields)]
+struct NamesRequest {
+    people: Vec<Person>,
+    #[serde(default)]
+    forbidden: Vec<String>,
 }
 
 #[derive(Serialize)]
 struct NamesResponse {
-    names: Vec<String>,
-    gender: Gender,
-    year: i32,
-    dataset_year: u16,
+    names: Vec<Picked>,
 }
 
 pub struct ApiError(StatusCode, String);
@@ -64,9 +48,9 @@ impl IntoResponse for ApiError {
     }
 }
 
-impl From<QueryRejection> for ApiError {
-    fn from(r: QueryRejection) -> Self {
-        Self(StatusCode::BAD_REQUEST, r.body_text())
+impl From<JsonRejection> for ApiError {
+    fn from(r: JsonRejection) -> Self {
+        Self(r.status(), r.body_text())
     }
 }
 
@@ -76,50 +60,17 @@ impl From<PickError> for ApiError {
     }
 }
 
-fn parse_forbidden(s: Option<&str>) -> Vec<String> {
-    s.unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|n| !n.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
-
-async fn name(
-    State(ds): State<AppState>,
-    q: Result<Query<NameQuery>, QueryRejection>,
-) -> Result<Json<NameResponse>, ApiError> {
-    let Query(q) = q?;
-    let forbidden = parse_forbidden(q.forbidden.as_deref());
-    let mut picked = ds.pick(q.gender, q.year, &forbidden, 1, &mut rand::rng())?;
-    Ok(Json(NameResponse {
-        name: picked.names.pop().expect("picked exactly one"),
-        gender: q.gender,
-        year: q.year,
-        dataset_year: picked.dataset_year,
-    }))
-}
-
 async fn names(
     State(ds): State<AppState>,
-    q: Result<Query<NameQuery>, QueryRejection>,
+    body: Result<Json<NamesRequest>, JsonRejection>,
 ) -> Result<Json<NamesResponse>, ApiError> {
-    let Query(q) = q?;
-    let count = q
-        .count
-        .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "missing field `count`".into()))?;
-    if !(1..=MAX_COUNT).contains(&count) {
+    let Json(req) = body?;
+    if !(1..=MAX_PEOPLE).contains(&req.people.len()) {
         return Err(ApiError(
-            StatusCode::BAD_REQUEST,
-            format!("count must be between 1 and {MAX_COUNT}"),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("people must contain between 1 and {MAX_PEOPLE} entries"),
         ));
     }
-    let forbidden = parse_forbidden(q.forbidden.as_deref());
-    let picked = ds.pick(q.gender, q.year, &forbidden, count, &mut rand::rng())?;
-    Ok(Json(NamesResponse {
-        names: picked.names,
-        gender: q.gender,
-        year: q.year,
-        dataset_year: picked.dataset_year,
-    }))
+    let names = ds.pick(&req.people, &req.forbidden, &mut rand::rng())?;
+    Ok(Json(NamesResponse { names }))
 }
