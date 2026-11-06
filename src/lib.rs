@@ -1,4 +1,5 @@
 pub mod data;
+pub mod mcp;
 
 use std::sync::Arc;
 
@@ -9,6 +10,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use data::{Dataset, Person, PickError, Picked};
@@ -24,11 +26,13 @@ pub const API_KEY_HEADER: &str = "x-api-key";
 /// Build the router. Every route requires `api_key` in the [`API_KEY_HEADER`]
 /// header.
 pub fn app(dataset: Dataset, api_key: String) -> Router {
+    let dataset = Arc::new(dataset);
     let api_key: Arc<str> = api_key.into();
     Router::new()
         .route("/names", post(names))
+        .nest_service("/mcp", mcp::http_service(dataset.clone()))
         .route_layer(middleware::from_fn_with_state(api_key, require_api_key))
-        .with_state(Arc::new(dataset))
+        .with_state(dataset)
 }
 
 async fn require_api_key(State(key): State<Arc<str>>, req: Request, next: Next) -> Response {
@@ -53,20 +57,41 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct NamesRequest {
-    people: Vec<Person>,
+pub struct NamesRequest {
+    /// The people to name (1 to 100). One name is returned for each, in the
+    /// same order.
+    pub people: Vec<Person>,
+    /// Names that must not be returned (case-insensitive).
     #[serde(default)]
-    forbidden: Vec<String>,
+    pub forbidden: Vec<String>,
 }
 
-#[derive(Serialize)]
-struct NamesResponse {
-    names: Vec<Picked>,
+#[derive(Serialize, JsonSchema)]
+pub struct NamesResponse {
+    pub names: Vec<Picked>,
+}
+
+/// Pick names for a request. Shared by the REST and MCP interfaces.
+pub fn generate(ds: &Dataset, req: &NamesRequest) -> Result<NamesResponse, ApiError> {
+    if !(1..=MAX_PEOPLE).contains(&req.people.len()) {
+        return Err(ApiError(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("people must contain between 1 and {MAX_PEOPLE} entries"),
+        ));
+    }
+    let names = ds.pick(&req.people, &req.forbidden, &mut rand::rng())?;
+    Ok(NamesResponse { names })
 }
 
 pub struct ApiError(StatusCode, String);
+
+impl ApiError {
+    pub fn message(&self) -> &str {
+        &self.1
+    }
+}
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
@@ -95,12 +120,5 @@ async fn names(
     body: Result<Json<NamesRequest>, JsonRejection>,
 ) -> Result<Json<NamesResponse>, ApiError> {
     let Json(req) = body?;
-    if !(1..=MAX_PEOPLE).contains(&req.people.len()) {
-        return Err(ApiError(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("people must contain between 1 and {MAX_PEOPLE} entries"),
-        ));
-    }
-    let names = ds.pick(&req.people, &req.forbidden, &mut rand::rng())?;
-    Ok(Json(NamesResponse { names }))
+    Ok(Json(generate(&ds, &req)?))
 }
