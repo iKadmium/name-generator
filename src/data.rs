@@ -8,12 +8,13 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use rand::{Rng, RngExt};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Generated from the ONS workbook by `scripts/convert_xlsx.py`.
 const NAMES_CSV: &str = include_str!("../data/names.csv");
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Gender {
     #[serde(alias = "m", alias = "boy")]
@@ -58,9 +59,11 @@ pub struct Dataset {
 }
 
 /// One name to generate.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
 pub struct Person {
     pub gender: Gender,
+    /// Year of birth. Mapped to the nearest year in the dataset, which has one
+    /// every 10 years from 1904 to 2024.
     pub year: i32,
 }
 
@@ -91,7 +94,7 @@ impl fmt::Display for PickError {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct Picked {
     pub name: String,
     pub gender: Gender,
