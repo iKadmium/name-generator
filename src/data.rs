@@ -1,7 +1,8 @@
-//! The baby-name dataset and weighted sampling over it.
+//! The baby-name dataset and random sampling over it.
 //!
-//! The ONS data only publishes ranks (top 100), not counts, so each name is
-//! weighted by Zipf's law: `weight = 1 / rank`. Name frequencies follow this
+//! Sampling is uniform by default. With weighting on, names are weighted by
+//! popularity. The ONS data only publishes ranks (top 100), not counts, so
+//! weighting uses Zipf's law: `weight = 1 / rank`. Name frequencies follow this
 //! distribution closely, so it is a reasonable stand-in for real counts.
 
 use std::collections::{HashMap, HashSet};
@@ -157,13 +158,15 @@ impl Dataset {
             .expect("every gender has at least one year")
     }
 
-    /// Pick one name per person, in order, weighted by popularity. Names in
-    /// `forbidden` (case-insensitive) are excluded, and each picked name is
-    /// excluded from the picks after it, so all returned names are distinct.
+    /// Pick one name per person, in order: uniformly at random, or weighted by
+    /// popularity if `weighted` is set. Names in `forbidden` (case-insensitive)
+    /// are excluded, and each picked name is excluded from the picks after it,
+    /// so all returned names are distinct.
     pub fn pick<R: Rng + ?Sized>(
         &self,
         people: &[Person],
         forbidden: &[String],
+        weighted: bool,
         rng: &mut R,
     ) -> Result<Vec<Picked>, PickError> {
         let mut forbidden: HashSet<String> = forbidden.iter().map(|n| n.to_lowercase()).collect();
@@ -175,7 +178,12 @@ impl Dataset {
                 .iter()
                 .filter(|e| !forbidden.contains(&e.name.to_lowercase()))
                 .collect();
-            let entry = weighted_choice(&candidates, rng).ok_or(PickError::NoNamesLeft {
+            let choice = if weighted {
+                weighted_choice(&candidates, rng)
+            } else {
+                uniform_choice(&candidates, rng)
+            };
+            let entry = choice.ok_or(PickError::NoNamesLeft {
                 index,
                 gender,
                 dataset_year: table.year,
@@ -190,6 +198,13 @@ impl Dataset {
         }
         Ok(picked)
     }
+}
+
+fn uniform_choice<'a, R: Rng + ?Sized>(candidates: &[&'a Entry], rng: &mut R) -> Option<&'a Entry> {
+    if candidates.is_empty() {
+        return None;
+    }
+    Some(candidates[rng.random_range(0..candidates.len())])
 }
 
 fn weighted_choice<'a, R: Rng + ?Sized>(
@@ -257,7 +272,12 @@ mod tests {
             .map(|e| e.name.to_uppercase())
             .collect();
         let picked = ds
-            .pick(&people(Gender::Male, 1954, 1), &forbidden, &mut rng())
+            .pick(
+                &people(Gender::Male, 1954, 1),
+                &forbidden,
+                false,
+                &mut rng(),
+            )
             .unwrap();
         assert_eq!(picked[0].name, *keep);
         assert_eq!(picked[0].dataset_year, 1954);
@@ -267,7 +287,7 @@ mod tests {
     fn picks_are_distinct() {
         let ds = Dataset::embedded();
         let picked = ds
-            .pick(&people(Gender::Female, 2024, 100), &[], &mut rng())
+            .pick(&people(Gender::Female, 2024, 100), &[], false, &mut rng())
             .unwrap();
         let unique: HashSet<_> = picked.iter().map(|p| &p.name).collect();
         assert_eq!(unique.len(), 100);
@@ -294,7 +314,7 @@ mod tests {
                 year: 1994,
             },
         ];
-        let err = ds.pick(&people, &others, &mut rng()).unwrap_err();
+        let err = ds.pick(&people, &others, false, &mut rng()).unwrap_err();
         assert_eq!(
             err,
             PickError::NoNamesLeft {
@@ -312,6 +332,7 @@ mod tests {
             .pick(
                 &people(Gender::Female, 2024, 100),
                 &["Olivia".into()],
+                false,
                 &mut rng(),
             )
             .unwrap_err();
@@ -325,22 +346,36 @@ mod tests {
         );
     }
 
-    #[test]
-    fn weighted_towards_top_ranks() {
+    /// How often the rank 1 and rank 100 names for 1904 boys come up.
+    fn top_and_bottom_counts(weighted: bool) -> (u32, u32) {
         let ds = Dataset::embedded();
         let mut rng = rng();
         let one = people(Gender::Male, 1904, 1);
-        let mut top = 0;
-        let mut bottom = 0;
+        let (mut top, mut bottom) = (0, 0);
         for _ in 0..20_000 {
-            let n = &ds.pick(&one, &[], &mut rng).unwrap()[0].name;
+            let n = &ds.pick(&one, &[], weighted, &mut rng).unwrap()[0].name;
             if n == "William" {
                 top += 1; // rank 1
             } else if n == "Jesse" {
                 bottom += 1; // rank 100
             }
         }
+        (top, bottom)
+    }
+
+    #[test]
+    fn weighted_favours_top_ranks() {
+        let (top, bottom) = top_and_bottom_counts(true);
         // Expected ratio is 100:1; allow plenty of slack.
         assert!(top > bottom * 30, "top={top} bottom={bottom}");
+    }
+
+    #[test]
+    fn unweighted_is_uniform() {
+        let (top, bottom) = top_and_bottom_counts(false);
+        // Each is expected ~200 times (1 in 100).
+        for n in [top, bottom] {
+            assert!((140..260).contains(&n), "top={top} bottom={bottom}");
+        }
     }
 }

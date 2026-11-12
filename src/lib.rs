@@ -66,6 +66,11 @@ pub struct NamesRequest {
     /// Names that must not be returned (case-insensitive).
     #[serde(default)]
     pub forbidden: Vec<String>,
+    /// Weight names by popularity, so common names come up more often than
+    /// rare ones. Defaults to false: every name in the year's top 100 is
+    /// equally likely.
+    #[serde(default)]
+    pub weighted: bool,
 }
 
 #[derive(Serialize, JsonSchema)]
@@ -81,7 +86,7 @@ pub fn generate(ds: &Dataset, req: &NamesRequest) -> Result<NamesResponse, ApiEr
             format!("people must contain between 1 and {MAX_PEOPLE} entries"),
         ));
     }
-    let names = ds.pick(&req.people, &req.forbidden, &mut rand::rng())?;
+    let names = ds.pick(&req.people, &req.forbidden, req.weighted, &mut rand::rng())?;
     Ok(NamesResponse { names })
 }
 

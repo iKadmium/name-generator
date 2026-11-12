@@ -35,8 +35,8 @@ impl NameServer {
         description = "Generate realistic first names for people born in England and Wales, \
             given each person's gender and year of birth. Names are drawn at random from \
             the ONS top 100 baby names for the nearest year on record (1904-2024, every \
-            10 years), weighted by popularity. All returned names are distinct, and none \
-            are in `forbidden`."
+            10 years), uniformly by default or weighted by popularity if `weighted` is \
+            true. All returned names are distinct, and none are in `forbidden`."
     )]
     fn generate_names(
         &self,
