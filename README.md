@@ -1,7 +1,7 @@
 # name-generator
 
-An Axum API and MCP server that returns random first names for a given gender and birth year,
-weighted by popularity, using the ONS
+An Axum API and MCP server that returns random first names for a given gender
+and birth year, optionally weighted by popularity, using the ONS
 [Top 100 baby names in England and Wales: historical data](https://www.ons.gov.uk/peoplepopulationandcommunity/birthsdeathsandmarriages/livebirths/datasets/babynamesenglandandwalestop100babynameshistoricaldata)
 (1904–2024).
 
@@ -97,6 +97,7 @@ $ curl localhost:3000/names -H 'x-api-key: secret' -H 'content-type: application
 | `gender`    |          | `male` / `female` (also accepts `m`, `boy`, `f`, `girl`)       |
 | `year`      |          | birth year                                                     |
 | `forbidden` | no       | names to exclude (case-insensitive)                            |
+| `weighted`  | no       | `true` to weight names by popularity; default `false` (uniform) |
 
 All returned names are distinct. Each name picked is added to the forbidden
 list before the next person's name is drawn, across genders and years.
@@ -117,9 +118,10 @@ Errors return JSON `{"error": "..."}`:
   2024). Each request uses the dataset year nearest to `year` (ties go to the
   earlier year). Years outside the range are clamped. The year actually used
   is returned as `dataset_year`.
-- **Weighting**: the dataset gives ranks, not counts. Names are weighted by
-  Zipf's law, `weight = 1 / rank`, so the #1 name is 100× as likely as the #100
-  name.
+- **Weighting**: off by default, so each of the year's top 100 names is
+  equally likely. With `"weighted": true`, names are weighted by popularity.
+  The dataset gives ranks, not counts, so weighting uses Zipf's law,
+  `weight = 1 / rank`: the #1 name is 100× as likely as the #100 name.
 
 ## Data pipeline
 

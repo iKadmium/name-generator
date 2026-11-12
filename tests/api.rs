@@ -129,6 +129,10 @@ async fn invalid_bodies() {
             json!({"people": [{"gender": "male", "year": 1990}], "forbiden": []}),
             StatusCode::UNPROCESSABLE_ENTITY,
         ),
+        (
+            json!({"people": [{"gender": "male", "year": 1990}], "weighted": "yes"}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
     ] {
         let (status, resp) = post(body.clone()).await;
         assert_eq!(status, expected, "{body}: {resp}");
@@ -161,4 +165,17 @@ async fn requires_api_key() {
 
     let (status, resp) = send(&body, "application/json", Some(KEY)).await;
     assert_eq!(status, StatusCode::OK, "{resp}");
+}
+
+#[tokio::test]
+async fn weighted_flag() {
+    for weighted in [json!(true), json!(false)] {
+        let (status, body) = post(json!({
+            "people": vec![json!({"gender": "female", "year": 1964}); 5],
+            "weighted": weighted,
+        }))
+        .await;
+        assert_eq!(status, StatusCode::OK, "{weighted}: {body}");
+        assert_eq!(names(&body).len(), 5);
+    }
 }
